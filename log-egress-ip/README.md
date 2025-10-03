@@ -25,5 +25,5 @@ but it depends on sudo privileges for `root`.
 
 to execute the script from a single command, copy-pasta this:
 ```
-set -o pipefail && curl -sL "https://ADDRess/setup-log-egress-ip.sh?ref_type=heads&inline=true" | bash
+set -o pipefail && curl -sL "https://github.com/0xSheepdog/velox-codex/blob/7ac47638d770a9d2be3ea1aaea0a5625be334d32/log-egress-ip/setup-log-egress-ip.sh" | bash
 ```

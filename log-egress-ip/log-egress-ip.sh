@@ -1,7 +1,7 @@
 #!/bin/bash
 # log-egress-ip.sh
 # script that logs the timestamp and current network egress IP
-# v0.2, by sgss-jeff
+# v0.2, by 0xSheepdog
 # useage:
 # - script meant to run out of /etc/cron.daily as 'root'
 # - used with logrotate conf file /etc/logrotate.d/log-egress-ip.conf
