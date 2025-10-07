@@ -17,13 +17,8 @@ fi
 # --- Configuration ---
 CRON_OUT="/etc/cron.daily/log-egress-ip.sh"
 CRON_URL="https://github.com/0xSheepdog/velox-codex/blob/7ac47638d770a9d2be3ea1aaea0a5625be334d32/log-egress-ip/log-egress-ip.sh"
-LOGROTATE_OUT="/etc/logrotate.d/log-egress-ip.conf"
-LOGROTATE_URL="https://github.com/0xSheepdog/velox-codex/blob/7ac47638d770a9d2be3ea1aaea0a5625be334d32/log-egress-ip/log-egress-ip.conf"
 
 # --- Download cron-script ---
 sudo curl -sL -o $CRON_OUT ${CRON_URL}
 sudo chmod 0744 ${CRON_OUT}
 
-# --- Download logrotate-conf ---
-sudo curl -sL -o $LOGROTATE_OUT ${LOGROTATE_URL}
-sudo chmod 0744 ${LOGROTATE_OUT}
