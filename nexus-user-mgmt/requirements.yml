@@ -1,0 +1,10 @@
+---
+# Install with:
+#   ansible-galaxy collection install -r requirements.yml -p ./collections
+#
+# community.general 11.x dropped support for ansible-core 2.13/2.14, and
+# 12.x requires ansible-core 2.18+. We constrain to <11.0.0 so this project
+# works on RHEL 9 ansible-core 2.14.x without warnings or removed plugins.
+collections:
+  - name: community.general
+    version: ">=7.0.0,<11.0.0"

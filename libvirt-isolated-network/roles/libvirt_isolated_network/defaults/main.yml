@@ -1,0 +1,47 @@
+---
+# =============================================================================
+# Operator-overridable defaults for libvirt_isolated_network role
+# Override in group_vars, host_vars, or via --extra-vars
+# =============================================================================
+
+# --- Libvirt network identity ---
+libvirt_net_name: isolated-nat
+libvirt_net_bridge: virbr10
+libvirt_net_autostart: true
+
+# --- IP addressing ---
+libvirt_net_host_ip: 192.168.150.1
+libvirt_net_netmask: 255.255.255.0
+libvirt_net_subnet_cidr: 192.168.150.0/24
+
+# --- DHCP configuration ---
+# Set libvirt_net_dhcp_enabled to false for a static-IP-only posture
+# (recommended for stricter isolation, since dnsmasq on the host is then
+# unreachable from the guest as well).
+libvirt_net_dhcp_enabled: true
+libvirt_net_dhcp_range_start: 192.168.150.10
+libvirt_net_dhcp_range_end: 192.168.150.50
+
+# --- NAT port range ---
+libvirt_net_nat_port_start: 1024
+libvirt_net_nat_port_end: 65535
+
+# --- nftables isolation rules ---
+libvirt_net_nft_table_name: libvirt_isolated
+libvirt_net_nft_rules_path: /etc/nftables/libvirt-isolated.nft
+
+# Allow DHCP/DNS from guest to host's dnsmasq. Required when
+# libvirt_net_dhcp_enabled is true; harmless when false.
+libvirt_net_allow_dhcp_dns: "{{ libvirt_net_dhcp_enabled }}"
+
+# Manage nftables service (enable + start). Set false if managed elsewhere.
+libvirt_net_manage_nftables_service: true
+
+# --- Package management ---
+libvirt_net_install_packages: true
+libvirt_net_required_packages:
+  - libvirt-daemon-config-network
+  - libvirt-daemon-driver-network
+  - nftables
+  - python3-libvirt
+  - python3-lxml

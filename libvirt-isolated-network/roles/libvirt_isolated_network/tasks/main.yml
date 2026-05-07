@@ -1,0 +1,93 @@
+---
+- name: Verify host is running a supported EL9 system
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == "RedHat"
+      - ansible_distribution_major_version | int >= 9
+    fail_msg: "This role targets RHEL/EL 9 or later (detected: {{ ansible_distribution }} {{ ansible_distribution_version }})"
+
+- name: Install required packages
+  ansible.builtin.dnf:
+    name: "{{ libvirt_net_required_packages }}"
+    state: present
+  when: libvirt_net_install_packages | bool
+
+- name: Ensure libvirtd service is enabled and running
+  ansible.builtin.systemd:
+    name: libvirtd
+    state: started
+    enabled: true
+
+- name: Render libvirt network XML to a staging path
+  ansible.builtin.template:
+    src: network.xml.j2
+    dest: "{{ libvirt_net_template_dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Redefine libvirt network
+
+- name: Define the libvirt network
+  community.libvirt.virt_net:
+    command: define
+    name: "{{ libvirt_net_name }}"
+    xml: "{{ lookup('template', 'network.xml.j2') }}"
+    uri: "{{ libvirt_net_uri }}"
+
+- name: Set libvirt network autostart
+  community.libvirt.virt_net:
+    name: "{{ libvirt_net_name }}"
+    autostart: "{{ libvirt_net_autostart }}"
+    uri: "{{ libvirt_net_uri }}"
+
+- name: Activate the libvirt network
+  community.libvirt.virt_net:
+    command: create
+    name: "{{ libvirt_net_name }}"
+    uri: "{{ libvirt_net_uri }}"
+  register: libvirt_net_create_result
+  failed_when:
+    - libvirt_net_create_result.failed | default(false)
+    - "'already active' not in (libvirt_net_create_result.msg | default(''))"
+    - "'already exists' not in (libvirt_net_create_result.msg | default(''))"
+
+- name: Ensure /etc/nftables directory exists
+  ansible.builtin.file:
+    path: "{{ libvirt_net_nft_rules_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Deploy nftables isolation rules
+  ansible.builtin.template:
+    src: libvirt-isolated.nft.j2
+    dest: "{{ libvirt_net_nft_rules_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload nftables isolation table
+
+- name: Ensure nftables service is enabled and running
+  ansible.builtin.systemd:
+    name: nftables
+    state: started
+    enabled: true
+  when: libvirt_net_manage_nftables_service | bool
+
+- name: Ensure isolation rules file is included on boot
+  ansible.builtin.lineinfile:
+    path: /etc/sysconfig/nftables.conf
+    line: 'include "{{ libvirt_net_nft_rules_path }}"'
+    state: present
+    create: true
+    owner: root
+    group: root
+    mode: "0600"
+  when: libvirt_net_manage_nftables_service | bool
+
+- name: Apply nftables rules immediately
+  ansible.builtin.command:
+    cmd: "nft -f {{ libvirt_net_nft_rules_path }}"
+  changed_when: false
+  check_mode: false

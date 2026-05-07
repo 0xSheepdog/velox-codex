@@ -1,0 +1,91 @@
+---
+# =============================================================================
+# List all local users on Nexus 3.
+#
+# - "Local" means users in the built-in Nexus realm (source=default), as
+#   opposed to SAML, LDAP, or other external realms.
+# - Authenticates with Nexus User Token.
+# - No prompts; this playbook takes no input.
+#
+# Run:
+#   ansible-playbook playbooks/list_local_users.yml --ask-vault-pass
+# =============================================================================
+
+- name: List all local Nexus users
+  hosts: local
+  gather_facts: false
+
+  tasks:
+
+    - name: Verify project variables are loaded
+      ansible.builtin.assert:
+        that:
+          - nexus_url is defined
+          - nexus_token_user is defined
+          - nexus_token_pass is defined
+        fail_msg: |
+          Required variables are not loaded. This usually means
+          ansible-playbook was run from a subdirectory.
+
+          Run from the project root, e.g.:
+            cd /path/to/nexus-user-mgmt
+            ansible-playbook playbooks/{{ ansible_play_name | default('this_playbook') }}.yml --ask-vault-pass
+
+          Also confirm inventory/group_vars/all/main.yml has nexus_url set, and
+          inventory/group_vars/all/vault.yml exists (created via ansible-vault create).
+
+    # Nexus's /security/users endpoint accepts a `source` query parameter.
+    # Setting it to "default" filters to the built-in (local) realm only,
+    # excluding SAML, LDAP, Crowd, etc.
+    - name: Fetch local users from Nexus
+      ansible.builtin.uri:
+        url: "{{ nexus_url }}/service/rest/v1/security/users?source=default"
+        method: GET
+        url_username: "{{ nexus_token_user }}"
+        url_password: "{{ nexus_token_pass }}"
+        force_basic_auth: true
+        validate_certs: "{{ nexus_validate_certs }}"
+        timeout: "{{ nexus_request_timeout }}"
+        status_code: 200
+      register: local_users_response
+
+    - name: Sort users by userId for stable output
+      ansible.builtin.set_fact:
+        local_users: "{{ local_users_response.json | sort(attribute='userId') }}"
+
+    - name: Display summary count
+      ansible.builtin.debug:
+        msg:
+          - "===== Local Nexus Users ====="
+          - "Server: {{ nexus_url }}"
+          - "Total local users: {{ local_users | length }}"
+
+    - name: Display each user
+      ansible.builtin.debug:
+        msg: "{{ user_lines }}"
+      vars:
+        user_lines: >-
+          {{
+            [
+              '----- ' ~ item.userId ~ ' -----',
+              'Name:    ' ~ (item.firstName | default('')) ~ ' ' ~ (item.lastName | default('')),
+              'Email:   ' ~ (item.emailAddress | default('')),
+              'Status:  ' ~ (item.status | default('')),
+              'Read Only: ' ~ (item.readOnly | default(false)),
+              'Roles (' ~ (item.roles | default([]) | length) ~ '):'
+            ]
+            + (
+              item.roles | default([]) | map('regex_replace', '^', '  - ') | list
+              if (item.roles | default([]) | length) > 0
+              else ['  (none)']
+            )
+          }}
+      loop: "{{ local_users }}"
+      loop_control:
+        label: "{{ item.userId }}"
+      when: local_users | length > 0
+
+    - name: Note when no local users exist
+      ansible.builtin.debug:
+        msg: "No local users found on {{ nexus_url }}."
+      when: local_users | length == 0

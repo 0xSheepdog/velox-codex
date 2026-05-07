@@ -1,0 +1,31 @@
+#!/usr/sbin/nft -f
+# Managed by Ansible role: libvirt_isolated_network
+# Network: {{ libvirt_net_name }} ({{ libvirt_net_subnet_cidr }} on {{ libvirt_net_bridge }})
+
+table inet {{ libvirt_net_nft_table_name }} {
+    chain forward {
+        type filter hook forward priority -5; policy accept;
+
+        # Block guest-to-guest traffic on the same bridge
+        iifname "{{ libvirt_net_bridge }}" oifname "{{ libvirt_net_bridge }}" drop
+
+        # Block guest-initiated traffic to the host's bridge IP
+        iifname "{{ libvirt_net_bridge }}" ip daddr {{ libvirt_net_host_ip }} drop
+    }
+
+    chain input {
+        type filter hook input priority -5; policy accept;
+
+        # Permit return traffic for host-initiated connections (e.g. host -> guest SSH)
+        iifname "{{ libvirt_net_bridge }}" ct state established,related accept
+
+{% if libvirt_net_allow_dhcp_dns %}
+        # Allow DHCP/DNS from guests so libvirt's dnsmasq remains usable
+        iifname "{{ libvirt_net_bridge }}" udp dport { 53, 67 } accept
+        iifname "{{ libvirt_net_bridge }}" tcp dport 53 accept
+{% endif %}
+
+        # Drop everything else originating from the guest network to the host
+        iifname "{{ libvirt_net_bridge }}" drop
+    }
+}

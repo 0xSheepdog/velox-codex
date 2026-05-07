@@ -1,0 +1,4 @@
+userId,firstName,lastName,emailAddress,roles
+jsmith,John,Smith,jsmith@example.com,nx-anonymous
+bjones,Bob,Jones,bjones@example.com,nx-anonymous;nx-developer
+adoe,Alice,Doe,adoe@example.com,nx-developer

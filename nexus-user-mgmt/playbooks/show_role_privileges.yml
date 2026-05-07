@@ -1,0 +1,98 @@
+---
+# =============================================================================
+# Display the privileges assigned to a given Nexus 3 role.
+#
+# Authenticates with Nexus User Token.
+#
+# Prompts:
+#   - Role ID (e.g., nx-admin, nx-developer, my-custom-role)
+#
+# Run:
+#   ansible-playbook playbooks/show_role_privileges.yml --ask-vault-pass
+# =============================================================================
+
+- name: Show Nexus role privileges
+  hosts: local
+  gather_facts: false
+
+  vars_prompt:
+    - name: role_id
+      prompt: |
+
+        Role ID to inspect (e.g. nx-admin, nx-developer, or a custom role)
+
+        Role ID
+      private: false
+
+  tasks:
+
+    - name: Verify project variables are loaded
+      ansible.builtin.assert:
+        that:
+          - nexus_url is defined
+          - nexus_token_user is defined
+          - nexus_token_pass is defined
+        fail_msg: |
+          Required variables are not loaded. This usually means
+          ansible-playbook was run from a subdirectory.
+
+          Run from the project root, e.g.:
+            cd /path/to/nexus-user-mgmt
+            ansible-playbook playbooks/{{ ansible_play_name | default('this_playbook') }}.yml --ask-vault-pass
+
+          Also confirm inventory/group_vars/all/main.yml has nexus_url set, and
+          inventory/group_vars/all/vault.yml exists (created via ansible-vault create).
+
+    - name: Fail if role_id is empty
+      ansible.builtin.fail:
+        msg: "No role ID was provided. Aborting."
+      when: role_id is not defined or role_id | trim | length == 0
+
+    - name: Fetch role from Nexus
+      ansible.builtin.uri:
+        url: "{{ nexus_url }}/service/rest/v1/security/roles/{{ role_id | trim }}"
+        method: GET
+        url_username: "{{ nexus_token_user }}"
+        url_password: "{{ nexus_token_pass }}"
+        force_basic_auth: true
+        validate_certs: "{{ nexus_validate_certs }}"
+        timeout: "{{ nexus_request_timeout }}"
+        return_content: true
+        status_code: [200, 404]
+      register: role_response
+
+    - name: Fail with a clear message if the role does not exist
+      ansible.builtin.fail:
+        msg: "Role '{{ role_id }}' was not found on {{ nexus_url }}."
+      when: role_response.status == 404
+
+    - name: Display role details
+      ansible.builtin.debug:
+        msg: "{{ role_lines }}"
+      vars:
+        role_lines: >-
+          {{
+            [
+              'Role:           ' ~ role_response.json.id,
+              'Name:           ' ~ (role_response.json.name | default('')),
+              'Description:    ' ~ (role_response.json.description | default('')),
+              'Source:         ' ~ (role_response.json.source | default('default')),
+              'Read Only:      ' ~ (role_response.json.readOnly | default(false)),
+              '',
+              'Privileges (' ~ (role_response.json.privileges | default([]) | length) ~ '):'
+            ]
+            + (
+              role_response.json.privileges | default([]) | map('regex_replace', '^', '  - ') | list
+              if (role_response.json.privileges | default([]) | length) > 0
+              else ['  (none directly assigned)']
+            )
+            + [
+              '',
+              'Nested roles (' ~ (role_response.json.roles | default([]) | length) ~ '):'
+            ]
+            + (
+              role_response.json.roles | default([]) | map('regex_replace', '^', '  - ') | list
+              if (role_response.json.roles | default([]) | length) > 0
+              else ['  (none)']
+            )
+          }}

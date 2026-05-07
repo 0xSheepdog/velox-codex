@@ -1,0 +1,9 @@
+---
+- name: Configure isolated libvirt NAT network
+  hosts: libvirt_hosts
+  gather_facts: true
+  become: true
+  become_method: sudo
+  become_user: root
+  roles:
+    - role: libvirt_isolated_network

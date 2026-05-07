@@ -1,0 +1,193 @@
+---
+# =============================================================================
+# Display full account details and effective privileges for a Nexus 3 user.
+#
+# - Fetches the user record (status, email, roles, source).
+# - Resolves each assigned role to its privilege list and displays them.
+#
+# Authenticates with Nexus User Token.
+#
+# Prompts:
+#   - userId
+#
+# Run:
+#   ansible-playbook playbooks/show_user_details.yml --ask-vault-pass
+# =============================================================================
+
+- name: Show Nexus user details and privileges
+  hosts: local
+  gather_facts: false
+
+  vars_prompt:
+    - name: target_user_id
+      prompt: |
+
+        userId to inspect (case-sensitive Nexus userId, e.g. jsmith)
+
+        userId
+      private: false
+
+  tasks:
+
+    - name: Verify project variables are loaded
+      ansible.builtin.assert:
+        that:
+          - nexus_url is defined
+          - nexus_token_user is defined
+          - nexus_token_pass is defined
+        fail_msg: |
+          Required variables are not loaded. This usually means
+          ansible-playbook was run from a subdirectory.
+
+          Run from the project root, e.g.:
+            cd /path/to/nexus-user-mgmt
+            ansible-playbook playbooks/{{ ansible_play_name | default('this_playbook') }}.yml --ask-vault-pass
+
+          Also confirm inventory/group_vars/all/main.yml has nexus_url set, and
+          inventory/group_vars/all/vault.yml exists (created via ansible-vault create).
+
+    - name: Fail if no userId was supplied
+      ansible.builtin.fail:
+        msg: "No userId was provided. Aborting."
+      when: target_user_id is not defined or target_user_id | trim | length == 0
+
+    # The /security/users endpoint accepts a userId query filter.
+    # It returns a list (possibly empty), so we filter it ourselves to
+    # guarantee an exact match.
+    - name: Search for user in Nexus
+      ansible.builtin.uri:
+        url: "{{ nexus_url }}/service/rest/v1/security/users?userId={{ target_user_id | trim | urlencode }}"
+        method: GET
+        url_username: "{{ nexus_token_user }}"
+        url_password: "{{ nexus_token_pass }}"
+        force_basic_auth: true
+        validate_certs: "{{ nexus_validate_certs }}"
+        timeout: "{{ nexus_request_timeout }}"
+        status_code: 200
+      register: user_search
+
+    - name: Reduce to exact userId match
+      ansible.builtin.set_fact:
+        matched_user: >-
+          {{
+            user_search.json
+            | selectattr('userId', 'equalto', target_user_id | trim)
+            | list
+            | first
+            | default(None)
+          }}
+
+    - name: Fail if user was not found
+      ansible.builtin.fail:
+        msg: "User '{{ target_user_id }}' was not found on {{ nexus_url }}."
+      when: matched_user is none
+
+    - name: Display user account details
+      ansible.builtin.debug:
+        msg: "{{ details_lines }}"
+      vars:
+        details_lines: >-
+          {{
+            [
+              '===== Account Details =====',
+              'userId:         ' ~ matched_user.userId,
+              'First name:     ' ~ (matched_user.firstName | default('')),
+              'Last name:      ' ~ (matched_user.lastName | default('')),
+              'Email:          ' ~ (matched_user.emailAddress | default('')),
+              'Status:         ' ~ (matched_user.status | default('')),
+              'Source:         ' ~ (matched_user.source | default('default')),
+              'Read Only:      ' ~ (matched_user.readOnly | default(false)),
+              'External Roles: ' ~ (matched_user.externalRoles | default([])),
+              '',
+              'Assigned roles (' ~ (matched_user.roles | default([]) | length) ~ '):'
+            ]
+            + (
+              matched_user.roles | default([]) | map('regex_replace', '^', '  - ') | list
+              if (matched_user.roles | default([]) | length) > 0
+              else ['  (none)']
+            )
+          }}
+
+    - name: Fetch each role assigned to the user
+      ansible.builtin.uri:
+        url: "{{ nexus_url }}/service/rest/v1/security/roles/{{ item }}"
+        method: GET
+        url_username: "{{ nexus_token_user }}"
+        url_password: "{{ nexus_token_pass }}"
+        force_basic_auth: true
+        validate_certs: "{{ nexus_validate_certs }}"
+        timeout: "{{ nexus_request_timeout }}"
+        status_code: [200, 404]
+      register: role_lookups
+      loop: "{{ matched_user.roles | default([]) }}"
+      loop_control:
+        label: "{{ item }}"
+      when: matched_user.roles | default([]) | length > 0
+
+    - name: Display privileges per role
+      ansible.builtin.debug:
+        msg: "{{ role_lines }}"
+      vars:
+        role_lines: >-
+          {{
+            ['===== Role: ' ~ item.item ~ ' =====']
+            + (
+              ['(Role record not found — may be an external/realm-mapped role)']
+              if item.status == 404
+              else (
+                [
+                  'Name:        ' ~ (item.json.name | default('')),
+                  'Description: ' ~ (item.json.description | default('')),
+                  'Privileges (' ~ (item.json.privileges | default([]) | length) ~ '):'
+                ]
+                + (
+                  item.json.privileges | default([]) | map('regex_replace', '^', '  - ') | list
+                  if (item.json.privileges | default([]) | length) > 0
+                  else ['  (none directly assigned)']
+                )
+                + ['Nested roles:']
+                + (
+                  item.json.roles | default([]) | map('regex_replace', '^', '  - ') | list
+                  if (item.json.roles | default([]) | length) > 0
+                  else ['  (none)']
+                )
+              )
+            )
+          }}
+      loop: "{{ role_lookups.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: role_lookups.results is defined
+
+    - name: Aggregate flat list of all privileges across all roles
+      ansible.builtin.set_fact:
+        all_privileges: >-
+          {{
+            role_lookups.results
+            | default([])
+            | selectattr('status', 'equalto', 200)
+            | map(attribute='json.privileges')
+            | flatten
+            | unique
+            | sort
+          }}
+      when: role_lookups.results is defined
+
+    - name: Display aggregated privilege summary
+      ansible.builtin.debug:
+        msg: "{{ summary_lines }}"
+      vars:
+        summary_lines: >-
+          {{
+            [
+              '===== Aggregated Privileges =====',
+              'Unique privileges granted across all assigned roles',
+              '(does not recursively expand nested roles):'
+            ]
+            + (
+              all_privileges | map('regex_replace', '^', '  - ') | list
+              if (all_privileges | length) > 0
+              else ['  (none)']
+            )
+          }}
+      when: all_privileges is defined

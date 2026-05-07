@@ -1,0 +1,11 @@
+---
+# Nexus server URL — edit for your environment.
+nexus_url: "https://repo.sgmo.io"
+
+# Connection behavior
+nexus_validate_certs: true
+nexus_request_timeout: 30
+
+# Token credentials are pulled from group_vars/all/vault.yml
+nexus_token_user: "{{ vault_nexus_token_user }}"
+nexus_token_pass: "{{ vault_nexus_token_pass }}"

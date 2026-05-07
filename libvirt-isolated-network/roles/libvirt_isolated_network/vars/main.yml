@@ -1,0 +1,9 @@
+---
+# =============================================================================
+# Internal role variables - not intended for operator override.
+# These are derived/static values that support the role's logic.
+# =============================================================================
+
+libvirt_net_xml_path: "/etc/libvirt/qemu/networks/{{ libvirt_net_name }}.xml"
+libvirt_net_template_dest: "/tmp/{{ libvirt_net_name }}-libvirt.xml"
+libvirt_net_uri: "qemu:///system"

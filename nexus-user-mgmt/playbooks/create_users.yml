@@ -1,0 +1,249 @@
+---
+# =============================================================================
+# Create Nexus 3 user accounts in bulk from a CSV file.
+#
+# - Authenticates with Nexus User Token (not admin password).
+# - All accounts are created with status "disabled".
+# - Each account is assigned a random throw-away password (NOT recorded).
+#   Password assignment and account activation are handled outside this
+#   project, directly in Nexus by an administrator.
+#
+# Prompts:
+#   - Path to the filled-in CSV (template: files/users_template.csv)
+#
+# Run:
+#   ansible-playbook playbooks/create_users.yml --ask-vault-pass
+# =============================================================================
+
+- name: Create Nexus user accounts from CSV
+  hosts: local
+  gather_facts: false
+
+  vars_prompt:
+    - name: users_csv_path_raw
+      prompt: "Path to the completed users CSV file (template at files/users_template.csv). CSV path"
+      private: false
+
+  tasks:
+
+    # Strip whitespace from the prompt input. Then, if the operator gave
+    # a relative path, resolve it against the project root (one level up
+    # from the playbook directory). Ansible chdirs into playbook_dir
+    # before executing tasks, so a bare 'files/foo.csv' would otherwise
+    # be looked up under playbooks/files/foo.csv. Absolute paths are
+    # used as-is.
+    - name: Normalize CSV path
+      ansible.builtin.set_fact:
+        users_csv_path: >-
+          {%- set raw = users_csv_path_raw | trim -%}
+          {%- if raw.startswith('/') -%}
+          {{ raw }}
+          {%- else -%}
+          {{ playbook_dir | dirname }}/{{ raw }}
+          {%- endif -%}
+
+    - name: Verify project variables are loaded
+      ansible.builtin.assert:
+        that:
+          - nexus_url is defined
+          - nexus_token_user is defined
+          - nexus_token_pass is defined
+        fail_msg: |
+          Required variables are not loaded. This usually means
+          ansible-playbook was run from a subdirectory.
+
+          Run from the project root, e.g.:
+            cd /path/to/nexus-user-mgmt
+            ansible-playbook playbooks/{{ ansible_play_name | default('this_playbook') }}.yml --ask-vault-pass
+
+          Also confirm inventory/group_vars/all/main.yml has nexus_url set, and
+          inventory/group_vars/all/vault.yml exists (created via ansible-vault create).
+
+    - name: Verify CSV file exists and is readable
+      ansible.builtin.stat:
+        path: "{{ users_csv_path }}"
+      register: csv_stat
+
+    - name: Show resolved CSV path (diagnostic)
+      ansible.builtin.debug:
+        msg:
+          - "Raw input from prompt:    '{{ users_csv_path_raw }}'"
+          - "Normalized (trimmed):     '{{ users_csv_path }}'"
+          - "Resolved by stat:         {{ csv_stat.stat.path | default('(no path returned)') }}"
+          - "Exists:                   {{ csv_stat.stat.exists }}"
+          - "Readable:                 {{ csv_stat.stat.readable | default('(unknown - file does not exist)') }}"
+
+    - name: Fail if CSV file does not exist
+      ansible.builtin.fail:
+        msg: |
+          CSV file not found.
+          Path provided:    {{ users_csv_path_raw }}
+          Resolved to:      {{ users_csv_path }}
+          Project root:     {{ playbook_dir | dirname }}
+          Working directory: {{ lookup('pipe', 'pwd') }}
+
+          Relative paths are resolved against the project root, so 'files/foo.csv'
+          looks for {{ playbook_dir | dirname }}/files/foo.csv. You may also
+          provide an absolute path.
+      when: not csv_stat.stat.exists
+
+    - name: Fail if CSV file is not readable
+      ansible.builtin.fail:
+        msg: |
+          CSV file at '{{ users_csv_path }}' exists but is not readable
+          by the current user. Check file permissions:
+            ls -la {{ users_csv_path }}
+      when: csv_stat.stat.exists and not csv_stat.stat.readable
+
+    - name: Read CSV file
+      community.general.read_csv:
+        path: "{{ users_csv_path }}"
+      register: users_csv
+
+    - name: Fail if CSV is empty
+      ansible.builtin.fail:
+        msg: "CSV file '{{ users_csv_path }}' has no data rows. Aborting."
+      when: users_csv.list | length == 0
+
+    - name: Validate required columns are present in every row
+      ansible.builtin.assert:
+        that:
+          - item.userId is defined and item.userId | length > 0
+          - item.firstName is defined and item.firstName | length > 0
+          - item.lastName is defined and item.lastName | length > 0
+          - item.emailAddress is defined and item.emailAddress | length > 0
+          - item.roles is defined and item.roles | length > 0
+        fail_msg: >
+          Row is missing required field(s): {{ item }}
+      loop: "{{ users_csv.list }}"
+      loop_control:
+        label: "{{ item.userId | default('<missing userId>') }}"
+
+    - name: Report CSV parsed successfully
+      ansible.builtin.debug:
+        msg:
+          - "Parsed {{ users_csv.list | length }} row(s) from {{ users_csv_path }}."
+          - "Target Nexus: {{ nexus_url }}"
+          - "All new accounts will be created with status: disabled"
+
+    # -------------------------------------------------------------------------
+    # Pre-flight: fetch existing users so we can skip duplicates explicitly
+    # rather than relying on the server's HTTP 400 response.
+    # -------------------------------------------------------------------------
+    - name: Fetch existing Nexus users (pre-flight)
+      ansible.builtin.uri:
+        url: "{{ nexus_url }}/service/rest/v1/security/users"
+        method: GET
+        url_username: "{{ nexus_token_user }}"
+        url_password: "{{ nexus_token_pass }}"
+        force_basic_auth: true
+        validate_certs: "{{ nexus_validate_certs }}"
+        timeout: "{{ nexus_request_timeout }}"
+        status_code: 200
+      register: existing_users_response
+
+    - name: Build set of existing userIds
+      ansible.builtin.set_fact:
+        existing_user_ids: >-
+          {{
+            existing_users_response.json
+            | default([])
+            | map(attribute='userId')
+            | list
+          }}
+
+    - name: Partition CSV rows into to-create vs already-exists
+      ansible.builtin.set_fact:
+        users_to_create: >-
+          {{
+            users_csv.list
+            | rejectattr('userId', 'in', existing_user_ids)
+            | list
+          }}
+        users_already_exist: >-
+          {{
+            users_csv.list
+            | selectattr('userId', 'in', existing_user_ids)
+            | list
+          }}
+
+    - name: Report users that already exist (will be skipped)
+      ansible.builtin.debug:
+        msg: "{{ skip_lines }}"
+      vars:
+        skip_lines: >-
+          {{
+            ['The following userIds already exist on Nexus and will be SKIPPED:']
+            + (users_already_exist | map(attribute='userId') | map('regex_replace', '^', '  - ') | list)
+          }}
+      when: users_already_exist | length > 0
+
+    - name: Report planned creations
+      ansible.builtin.debug:
+        msg: "{{ plan_lines }}"
+      vars:
+        # Pre-format user records to strings via a Jinja {% for %} loop,
+        # then split on the delimiter to get a clean list of strings.
+        # (Jinja2 list comprehensions are not available in older
+        # ansible-core / Jinja2 versions, so we use this idiom instead.)
+        formatted_users: >-
+          {%- set lines = [] -%}
+          {%- for u in users_to_create -%}
+          {{- lines.append('  - ' ~ u.userId ~ ' (' ~ u.firstName ~ ' ' ~ u.lastName ~ ') -> roles: ' ~ u.roles) -}}
+          {%- endfor -%}
+          {{ lines }}
+        plan_lines: >-
+          {{
+            [(users_to_create | length | string) ~ ' user(s) will be created (disabled):']
+            + (formatted_users if (users_to_create | length) > 0 else ['  (none)'])
+          }}
+
+    - name: Exit early if there is nothing to create
+      ansible.builtin.meta: end_play
+      when: users_to_create | length == 0
+
+    # -------------------------------------------------------------------------
+    # Create only the new users. status_code is now strict: 200 means success,
+    # anything else fails the playbook so operators see the real problem.
+    # -------------------------------------------------------------------------
+    - name: Create each Nexus user account
+      ansible.builtin.uri:
+        url: "{{ nexus_url }}/service/rest/v1/security/users"
+        method: POST
+        url_username: "{{ nexus_token_user }}"
+        url_password: "{{ nexus_token_pass }}"
+        force_basic_auth: true
+        validate_certs: "{{ nexus_validate_certs }}"
+        timeout: "{{ nexus_request_timeout }}"
+        body_format: json
+        body:
+          userId: "{{ item.userId }}"
+          firstName: "{{ item.firstName }}"
+          lastName: "{{ item.lastName }}"
+          emailAddress: "{{ item.emailAddress }}"
+          # Throw-away password — not recorded anywhere.
+          # The account is disabled and the real password will be set
+          # outside this project when the account is activated.
+          password: "{{ lookup('password', '/dev/null length=32 chars=ascii_letters,digits') }}"
+          status: "disabled"
+          roles: "{{ item.roles.split(';') | map('trim') | list }}"
+        status_code: 200
+      register: create_results
+      loop: "{{ users_to_create }}"
+      loop_control:
+        label: "{{ item.userId }}"
+
+    - name: Report per-user results
+      ansible.builtin.debug:
+        msg: "[OK] {{ item.item.userId }} created (disabled)."
+      loop: "{{ create_results.results }}"
+      loop_control:
+        label: "{{ item.item.userId }}"
+
+    - name: Final summary
+      ansible.builtin.debug:
+        msg:
+          - "Created: {{ create_results.results | length }}"
+          - "Skipped (already existed): {{ users_already_exist | length }}"
+          - "Reminder: all newly created accounts are DISABLED with throw-away"
+          - "passwords. Activate and set real passwords in Nexus directly."

@@ -1,0 +1,20 @@
+# Keep the CSV template tracked; ignore any other CSVs operators drop in files/
+files/*.csv
+!files/users_template.csv
+
+# Project-local collections.
+# Installed via: ansible-galaxy collection install -r requirements.yml -p ./collections
+collections/
+
+# Ansible transients
+*.retry
+.ansible/
+
+# Vault password files (operators may keep these locally)
+.vault_pass
+*.vaultpass
+
+# Editor cruft
+.vscode/
+.idea/
+*.swp

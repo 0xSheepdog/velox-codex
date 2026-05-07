@@ -1,0 +1,23 @@
+---
+galaxy_info:
+  role_name: libvirt_isolated_network
+  author: SRE
+  description: >
+    Configures an isolated libvirt NAT network on EL9 hypervisors. Guests
+    receive outbound internet via NAT but are blocked from reaching host
+    services or other guests on the same bridge. Host-initiated SSH to
+    guests is permitted via conntrack.
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: EL
+      versions:
+        - "9"
+  galaxy_tags:
+    - libvirt
+    - networking
+    - nftables
+    - virtualization
+    - rhel
+
+dependencies: []
