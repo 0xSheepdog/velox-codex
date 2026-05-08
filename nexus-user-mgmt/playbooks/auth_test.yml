@@ -1,0 +1,15 @@
+---
+- hosts: local
+  gather_facts: false
+  tasks:
+    - name: Auth smoke test
+      ansible.builtin.uri:
+        url: "{{ nexus_url }}/service/rest/v1/status"
+        url_username: "{{ nexus_token_user }}"
+        url_password: "{{ nexus_token_pass }}"
+        force_basic_auth: true
+        status_code: 200
+      register: result
+    - name: Debug output
+      ansible.builtin.debug:
+        var: result.status

@@ -82,6 +82,16 @@ ansible-playbook playbooks/show_user_details.yml --ask-vault-pass
 Prompts for a userId. Shows the user record plus the privileges granted by
 each of the user's assigned roles.
 
+### 4. List all local users
+
+```bash
+ansible-playbook playbooks/list_local_users.yml --ask-vault-pass
+```
+
+Lists every user in the built-in Nexus realm (`source=default`) with their
+basic details and assigned roles. Excludes SAML, LDAP, and other external
+realm users. Takes no input.
+
 ## Notes
 
 - These playbooks run on `localhost`; no managed nodes are required.

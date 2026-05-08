@@ -30,7 +30,7 @@ traffic.
 Install collection dependencies:
 
 ```bash
-ansible-galaxy collection install -r requirements.yml
+ansible-galaxy collection install -r requirements.yml -p ./collections
 ```
 
 Run the playbook:
@@ -38,9 +38,6 @@ Run the playbook:
 ```bash
 ansible-playbook site.yml
 ```
-
-The playbook escalates via `become` (configured in `ansible.cfg` and
-`site.yml`).
 
 ## Overriding Defaults
 

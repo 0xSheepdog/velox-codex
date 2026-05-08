@@ -1,0 +1,3 @@
+# Example of the encrypted contents of the vault.yml file
+vault_nexus_token_user: "NuByxxxxxxxxxxxxxxxx"     # token "name code"
+vault_nexus_token_pass: "abcd1234efgh5678ijkl"     # token "pass code"
