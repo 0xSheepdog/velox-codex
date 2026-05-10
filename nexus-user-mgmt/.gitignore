@@ -1,6 +1,7 @@
-# Keep the CSV template tracked; ignore any other CSVs operators drop in files/
-files/*.csv
+# Keep the CSV and TXT templates tracked; ignore any others dropped in files/
+files/*
 !files/users_template.csv
+!files/role_privileges_template.txt
 
 # Project-local collections.
 # Installed via: ansible-galaxy collection install -r requirements.yml -p ./collections

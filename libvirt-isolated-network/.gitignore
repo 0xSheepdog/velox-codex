@@ -1,0 +1,12 @@
+# Project-local collections.
+# Installed via: ansible-galaxy collection install -r requirements.yml -p ./collections
+collections/
+
+# Ansible transients
+*.retry
+.ansible/
+
+# Editor cruft
+.vscode/
+.idea/
+*.swp

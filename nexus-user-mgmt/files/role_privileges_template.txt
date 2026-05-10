@@ -1,0 +1,18 @@
+# Privileges to apply to a Nexus role. One privilege per line.
+# Lines starting with '#' and blank lines are ignored.
+#
+# QOL privileges (recommended for any team role):
+# nx-search-read
+# nx-healthcheck-read
+#
+# User Token (required for CLI/API access):
+# nx-usertoken-current
+#
+# Repository privileges follow the pattern:
+#   nx-repository-view-<format>-<reponame>-<action>
+# where <action> is one of: browse, read, add, edit, delete, or *
+#
+# Allow QoL and usertoken-current privilege for docker-cli, rest api, etc. access
+nx-search-read
+nx-healthcheck-read
+nx-usertoken-current

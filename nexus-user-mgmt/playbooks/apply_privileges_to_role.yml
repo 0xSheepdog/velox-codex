@@ -1,0 +1,334 @@
+---
+# =============================================================================
+# Apply a list of privileges to an existing Nexus 3 role.
+#
+# - Authenticates with Nexus User Token (not admin password).
+# - Reads privileges from a plain text file, one privilege name per line.
+#   Blank lines and lines beginning with '#' are ignored.
+# - Performs an additive update: existing role privileges are preserved,
+#   and the new privileges are merged in (union). This playbook never
+#   removes privileges from a role.
+# - Validates that the role exists and that every privilege named in the
+#   file exists on Nexus before issuing any change.
+#
+# Prompts:
+#   - The role ID to update.
+#   - Path to the privileges file (one privilege per line).
+#
+# Run:
+#   ansible-playbook playbooks/apply_privileges_to_role.yml --ask-vault-pass
+# =============================================================================
+
+- name: Apply privileges to a Nexus role
+  hosts: local
+  gather_facts: false
+
+  vars_prompt:
+    - name: target_role_id_raw
+      prompt: "Role ID to update (e.g. devlead-role)"
+      private: false
+
+    - name: privileges_file_path_raw
+      prompt: "Path to privileges file (one privilege per line, # for comments)"
+      private: false
+
+  tasks:
+
+    # Strip whitespace from prompt inputs. Resolve a relative file path
+    # against the project root (one level up from playbook_dir), matching
+    # the behavior of create_users.yml. Absolute paths are used as-is.
+    - name: Normalize prompt inputs
+      ansible.builtin.set_fact:
+        target_role_id: "{{ target_role_id_raw | trim }}"
+        privileges_file_path: >-
+          {%- set raw = privileges_file_path_raw | trim -%}
+          {%- if raw.startswith('/') -%}
+          {{ raw }}
+          {%- else -%}
+          {{ playbook_dir | dirname }}/{{ raw }}
+          {%- endif -%}
+
+    - name: Verify project variables are loaded
+      ansible.builtin.assert:
+        that:
+          - nexus_url is defined
+          - nexus_token_user is defined
+          - nexus_token_pass is defined
+        fail_msg: |
+          Required variables are not loaded. This usually means
+          ansible-playbook was run from a subdirectory.
+
+          Run from the project root, e.g.:
+            cd /path/to/nexus-user-mgmt
+            ansible-playbook playbooks/apply_privileges_to_role.yml --ask-vault-pass
+
+          Also confirm inventory/group_vars/all/main.yml has nexus_url set, and
+          inventory/group_vars/all/vault.yml exists (created via ansible-vault create).
+
+    - name: Fail if role ID is empty
+      ansible.builtin.fail:
+        msg: "Role ID cannot be empty."
+      when: target_role_id | length == 0
+
+    - name: Verify privileges file exists and is readable
+      ansible.builtin.stat:
+        path: "{{ privileges_file_path }}"
+      register: privileges_file_stat
+
+    - name: Show resolved paths (diagnostic)
+      ansible.builtin.debug:
+        msg:
+          - "Role ID:                  '{{ target_role_id }}'"
+          - "Raw file input:           '{{ privileges_file_path_raw }}'"
+          - "Normalized (trimmed):     '{{ privileges_file_path }}'"
+          - "Resolved by stat:         {{ privileges_file_stat.stat.path | default('(no path returned)') }}"
+          - "Exists:                   {{ privileges_file_stat.stat.exists }}"
+          - "Readable:                 {{ privileges_file_stat.stat.readable | default('(unknown - file does not exist)') }}"
+
+    - name: Fail if privileges file does not exist
+      ansible.builtin.fail:
+        msg: |
+          Privileges file not found.
+          Path provided:    {{ privileges_file_path_raw }}
+          Resolved to:      {{ privileges_file_path }}
+          Project root:     {{ playbook_dir | dirname }}
+          Working directory: {{ lookup('pipe', 'pwd') }}
+
+          Relative paths are resolved against the project root, so 'files/foo.txt'
+          looks for {{ playbook_dir | dirname }}/files/foo.txt. You may also
+          provide an absolute path.
+      when: not privileges_file_stat.stat.exists
+
+    - name: Fail if privileges file is not readable
+      ansible.builtin.fail:
+        msg: |
+          Privileges file at '{{ privileges_file_path }}' exists but is not
+          readable by the current user. Check file permissions:
+            ls -la {{ privileges_file_path }}
+      when: privileges_file_stat.stat.exists and not privileges_file_stat.stat.readable
+
+    # -------------------------------------------------------------------------
+    # Parse the privileges file. Strip blank lines and comments, trim each
+    # entry, and de-duplicate while preserving file order.
+    # -------------------------------------------------------------------------
+    - name: Read and parse privileges file
+      ansible.builtin.set_fact:
+        requested_privileges: >-
+          {{
+            (lookup('file', privileges_file_path).splitlines())
+            | map('trim')
+            | reject('match', '^#')
+            | reject('equalto', '')
+            | list
+            | unique
+          }}
+
+    - name: Fail if privileges file contains no privilege entries
+      ansible.builtin.fail:
+        msg: |
+          Privileges file '{{ privileges_file_path }}' contains no usable
+          entries. Lines starting with '#' and blank lines are ignored.
+          Add at least one privilege name (e.g. nx-search-read) and re-run.
+      when: requested_privileges | length == 0
+
+    - name: Report parsed privileges file
+      ansible.builtin.debug:
+        msg:
+          - "Parsed {{ requested_privileges | length }} privilege(s) from file."
+          - "Target Nexus: {{ nexus_url }}"
+          - "Target role:  {{ target_role_id }}"
+
+    # -------------------------------------------------------------------------
+    # Pre-flight: fetch the target role. We need its current definition
+    # because the Nexus REST API requires a full role payload on PUT.
+    # A 404 here means the role does not exist; fail with a clear message
+    # rather than the raw HTTP error.
+    # -------------------------------------------------------------------------
+    - name: Fetch target role from Nexus
+      ansible.builtin.uri:
+        url: "{{ nexus_url }}/service/rest/v1/security/roles/{{ target_role_id }}"
+        method: GET
+        url_username: "{{ nexus_token_user }}"
+        url_password: "{{ nexus_token_pass }}"
+        force_basic_auth: true
+        validate_certs: "{{ nexus_validate_certs }}"
+        timeout: "{{ nexus_request_timeout }}"
+        status_code: [200, 404]
+      register: role_response
+
+    - name: Fail if role does not exist
+      ansible.builtin.fail:
+        msg: |
+          Role '{{ target_role_id }}' was not found on Nexus.
+          List existing roles with:
+            curl -s -u <user>:<token> {{ nexus_url }}/service/rest/v1/security/roles | jq '.[].id'
+      when: role_response.status == 404
+
+    - name: Capture current role state
+      ansible.builtin.set_fact:
+        current_role: "{{ role_response.json }}"
+        current_role_privileges: "{{ role_response.json.privileges | default([]) }}"
+
+    # -------------------------------------------------------------------------
+    # Pre-flight: fetch all privileges to validate the names in the file.
+    # The Nexus PUT endpoint will silently accept unknown privilege names
+    # in some versions, so we validate up front rather than trust the API.
+    # -------------------------------------------------------------------------
+    - name: Fetch all privileges from Nexus (validation)
+      ansible.builtin.uri:
+        url: "{{ nexus_url }}/service/rest/v1/security/privileges"
+        method: GET
+        url_username: "{{ nexus_token_user }}"
+        url_password: "{{ nexus_token_pass }}"
+        force_basic_auth: true
+        validate_certs: "{{ nexus_validate_certs }}"
+        timeout: "{{ nexus_request_timeout }}"
+        status_code: 200
+      register: all_privileges_response
+
+    - name: Build set of valid privilege names
+      ansible.builtin.set_fact:
+        valid_privilege_names: >-
+          {{
+            all_privileges_response.json
+            | default([])
+            | map(attribute='name')
+            | list
+          }}
+
+    - name: Identify unknown privileges from the input file
+      ansible.builtin.set_fact:
+        unknown_privileges: >-
+          {{
+            requested_privileges
+            | reject('in', valid_privilege_names)
+            | list
+          }}
+
+    - name: Fail if any requested privilege does not exist on Nexus
+      ansible.builtin.fail:
+        msg: |
+          The following privilege(s) named in '{{ privileges_file_path }}' do
+          not exist on Nexus and would be rejected (or silently dropped) by
+          the API:
+
+          {{ unknown_privileges | map('regex_replace', '^', '  - ') | join('\n') }}
+
+          Verify the names under Security > Privileges in the Nexus UI, or:
+            curl -s -u <user>:<token> {{ nexus_url }}/service/rest/v1/security/privileges \
+              | jq -r '.[].name' | grep <pattern>
+      when: unknown_privileges | length > 0
+
+    # -------------------------------------------------------------------------
+    # Partition the requested privileges into already-on-role vs to-add,
+    # then compute the merged set for the PUT payload.
+    # -------------------------------------------------------------------------
+    - name: Partition requested privileges into already-present vs to-add
+      ansible.builtin.set_fact:
+        privileges_already_on_role: >-
+          {{
+            requested_privileges
+            | select('in', current_role_privileges)
+            | list
+          }}
+        privileges_to_add: >-
+          {{
+            requested_privileges
+            | reject('in', current_role_privileges)
+            | list
+          }}
+
+    - name: Compute merged privilege list (union, sorted)
+      ansible.builtin.set_fact:
+        merged_privileges: "{{ (current_role_privileges + privileges_to_add) | unique | sort }}"
+
+    - name: Report planned changes
+      ansible.builtin.debug:
+        msg: "{{ plan_lines }}"
+      vars:
+        plan_lines: >-
+          {{
+            ['Role: ' ~ target_role_id]
+            + ['Currently has ' ~ (current_role_privileges | length | string) ~ ' privilege(s).']
+            + [(privileges_to_add | length | string) ~ ' privilege(s) will be added:']
+            + (
+                (privileges_to_add | map('regex_replace', '^', '  + ') | list)
+                if (privileges_to_add | length) > 0
+                else ['  (none)']
+              )
+            + [(privileges_already_on_role | length | string) ~ ' privilege(s) already on the role (skipped):']
+            + (
+                (privileges_already_on_role | map('regex_replace', '^', '  = ') | list)
+                if (privileges_already_on_role | length) > 0
+                else ['  (none)']
+              )
+          }}
+
+    - name: Exit early if there is nothing to add
+      ansible.builtin.meta: end_play
+      when: privileges_to_add | length == 0
+
+    # -------------------------------------------------------------------------
+    # Apply the merged privilege set. Nexus requires the full role definition
+    # on PUT, so we send id, name, description, privileges, and roles even
+    # though only privileges are changing.
+    # -------------------------------------------------------------------------
+    - name: Update role with merged privileges
+      ansible.builtin.uri:
+        url: "{{ nexus_url }}/service/rest/v1/security/roles/{{ target_role_id }}"
+        method: PUT
+        url_username: "{{ nexus_token_user }}"
+        url_password: "{{ nexus_token_pass }}"
+        force_basic_auth: true
+        validate_certs: "{{ nexus_validate_certs }}"
+        timeout: "{{ nexus_request_timeout }}"
+        body_format: json
+        body:
+          id: "{{ current_role.id }}"
+          name: "{{ current_role.name }}"
+          description: "{{ current_role.description | default('') }}"
+          privileges: "{{ merged_privileges }}"
+          roles: "{{ current_role.roles | default([]) }}"
+        status_code: 204
+      register: update_result
+
+    # -------------------------------------------------------------------------
+    # Confirm the update by re-fetching the role. This protects against the
+    # case where the API accepts the PUT but silently drops entries.
+    # -------------------------------------------------------------------------
+    - name: Re-fetch role to confirm update
+      ansible.builtin.uri:
+        url: "{{ nexus_url }}/service/rest/v1/security/roles/{{ target_role_id }}"
+        method: GET
+        url_username: "{{ nexus_token_user }}"
+        url_password: "{{ nexus_token_pass }}"
+        force_basic_auth: true
+        validate_certs: "{{ nexus_validate_certs }}"
+        timeout: "{{ nexus_request_timeout }}"
+        status_code: 200
+      register: confirmed_role_response
+
+    - name: Capture confirmed role state
+      ansible.builtin.set_fact:
+        confirmed_role: "{{ confirmed_role_response.json }}"
+
+    - name: Final summary
+      ansible.builtin.debug:
+        msg: "{{ summary_lines }}"
+      vars:
+        summary_lines: >-
+          {{
+            ['=' * 60]
+            + ['Role updated: ' ~ confirmed_role.id]
+            + ['Name:         ' ~ confirmed_role.name]
+            + ['Description:  ' ~ (confirmed_role.description | default('(none)'))]
+            + ['Source:       ' ~ (confirmed_role.source | default('default'))]
+            + ['Nested roles: ' ~ ((confirmed_role.roles | default([])) | join(', ') or '(none)')]
+            + ['=' * 60]
+            + ['Privileges on role (' ~ (confirmed_role.privileges | length | string) ~ ' total):']
+            + (confirmed_role.privileges | sort | map('regex_replace', '^', '  - ') | list)
+            + ['=' * 60]
+            + ['Added this run:    ' ~ (privileges_to_add | length | string)]
+            + ['Already present:   ' ~ (privileges_already_on_role | length | string)]
+            + ['Removed this run:  0 (this playbook never removes privileges)']
+          }}
