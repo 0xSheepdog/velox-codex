@@ -1,0 +1,11 @@
+---
+# Install with:
+#   ansible-galaxy collection install -r requirements.yml -p ./collections
+#
+# community.general 11.x dropped support for ansible-core 2.14
+# ansible.posix 1.6.0 dropped support for ansible-core 2.14 support
+collections:
+  - name: community.general
+    version: ">=7.0.0,<11.0.0"
+  - name: ansible.posix
+    version: ">=1.5.0,<1.6.0"

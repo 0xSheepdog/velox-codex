@@ -1,0 +1,4 @@
+---
+# vars for all hosts (secret values are in vault.yml, ansible-vault encrypted)
+user: "{{ vault_user }}"
+pass: "{{ vault_pass }}"

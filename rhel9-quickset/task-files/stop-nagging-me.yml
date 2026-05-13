@@ -1,0 +1,12 @@
+---
+# task-file: stop-nagging-me.yml
+# Description: This playbook is designed to stop the "nagging" messages that
+# appear in the terminal when connecting via SSH.
+- name: Suppress cockpit issue symlink
+  ansible.builtin.file:
+    path: /etc/issue.d/cockpit.issue
+    state: touch        # ensure it's a regular file, not a symlink
+    owner: root
+    group: root
+    mode: '0644'
+  become: true

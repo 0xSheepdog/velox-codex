@@ -1,0 +1,36 @@
+# Push a file to NXRM3 raw repo
+# Usage: nx_push /local/path/to/file.rpm /remote/path/file.rpm
+nx_push() {
+    local local_file="$1"
+    local remote_path="$2"
+    curl -sf --user "${NEXUS_USER}:${NEXUS_PASS}" \
+         --upload-file "${local_file}" \
+         "${NEXUS_URL}/repository/${NEXUS_REPO}/${remote_path}"
+    echo "Pushed ${local_file} → ${NEXUS_REPO}/${remote_path}"
+}
+
+# Pull a file from NXRM3 raw repo
+# Usage: nx_pull /remote/path/file.rpm [optional-local-filename]
+nx_pull() {
+    local remote_path="$1"
+    local local_file="${2:-$(basename "$1")}"
+    curl -sfL --user "${NEXUS_USER}:${NEXUS_PASS}" \
+         -o "${local_file}" \
+         "${NEXUS_URL}/repository/${NEXUS_REPO}/${remote_path}"
+    echo "Pulled ${NEXUS_REPO}/${remote_path} → ${local_file}"
+}
+
+# List directory contents in a raw repo path
+# Usage: nx_ls /remote/path/
+nx_ls() {
+    local remote_path="${1:-/}"
+    curl -sf --user "${NEXUS_USER}:${NEXUS_PASS}" \
+         "${NEXUS_URL}/service/rest/v1/components?repository=${NEXUS_REPO}" \
+        | python3 -c "
+import sys, json
+items = json.load(sys.stdin).get('items', [])
+for i in items:
+    for a in i.get('assets', []):
+        print(a['path'])
+" | grep "^${remote_path}" | sort
+}

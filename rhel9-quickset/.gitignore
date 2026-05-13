@@ -3,10 +3,6 @@ files/*
 !files/users_template.csv
 !files/role_privileges_template.txt
 
-# Keep the example_ templates tracked; ignore any others dropped in shell-ops
-shell-ops/*
-!shell-ops/example_*rc
-
 # Project-local collections.
 # Installed via: ansible-galaxy collection install -r requirements.yml -p ./collections
 collections/

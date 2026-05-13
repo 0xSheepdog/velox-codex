@@ -1,0 +1,6 @@
+# Example of the encrypted contents of the vault.yml file. See "main.yml" for
+#   how these relate to the variables used in the playbooks
+# Encrypt with:
+#   ansible-vault encrypt example_vault.yml --output vault.yml
+vault_user: "xxxxxxxxxxxxxxxx"
+vault_pass: "1234efgh5678ijkl"

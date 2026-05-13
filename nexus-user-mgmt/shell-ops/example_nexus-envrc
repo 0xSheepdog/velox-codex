@@ -1,0 +1,5 @@
+# Nexus connection
+export NEXUS_URL="https://nexus.example.com"
+export NEXUS_REPO="my-raw-repo"
+export NEXUS_USER="your-username"
+export NEXUS_PASS="your-password-or-token"

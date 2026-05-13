@@ -1,0 +1,7 @@
+---
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: Task-file stop-nagging-me.yml
+      import_tasks: "task-files/stop-nagging-me.yml"
+      tags: stop-nagging-me
